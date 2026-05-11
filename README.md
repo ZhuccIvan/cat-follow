@@ -27,7 +27,9 @@
 
 ## 本地运行
 
-在项目目录启动静态服务：
+1. 直接打开index.html
+
+2.在项目目录启动静态服务
 
 ```powershell
 python -m http.server 8123 --bind 127.0.0.1
