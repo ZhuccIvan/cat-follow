@@ -1,0 +1,12 @@
+{
+  "frame_count": 5,
+  "frame_size": 256,
+  "sprite_columns": 8,
+  "sprite_size": [
+    2048,
+    256
+  ],
+  "front_index": 4,
+  "video": "G:\\aiProject\\cat-follow\\生成指定猫咪动作的视频.mp4",
+  "sample_step": 2
+}

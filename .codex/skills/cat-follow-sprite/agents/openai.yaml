@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cat Follow Sprite"
+  short_description: "Build mouse-following cat sprites"
+  default_prompt: "Use $cat-follow-sprite to turn a cat video into a mouse-following static HTML sprite."

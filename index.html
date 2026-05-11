@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cat Follow</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --mint: #a7d7b0;
+      --ink: #304139;
+      --paper: #f7f4ea;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.72), transparent 31rem),
+        linear-gradient(135deg, #d9efd7, var(--mint) 48%, #82bd91);
+      font-family: Cambria, Georgia, "Microsoft YaHei", serif;
+    }
+
+    .stage {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      isolation: isolate;
+    }
+
+    .stage::before {
+      content: "";
+      position: absolute;
+      width: min(64vw, 40rem);
+      height: min(64vw, 40rem);
+      border-radius: 50%;
+      background:
+        repeating-radial-gradient(circle, rgba(255, 255, 255, 0.16) 0 1px, transparent 1px 16px);
+      opacity: 0.58;
+      transform: translateY(-2rem);
+      z-index: -2;
+    }
+
+    .shadow {
+      position: absolute;
+      width: min(44rem, 82vw);
+      height: 5.5rem;
+      border-radius: 50%;
+      background: radial-gradient(ellipse, rgba(38, 67, 47, 0.22), transparent 70%);
+      transform: translateY(min(21rem, 38vw));
+      filter: blur(2px);
+      z-index: -1;
+    }
+
+    canvas {
+      width: min(68vmin, 38rem);
+      height: min(68vmin, 38rem);
+      display: block;
+      image-rendering: auto;
+      filter: drop-shadow(0 1.4rem 1.2rem rgba(44, 72, 53, 0.18));
+    }
+  </style>
+</head>
+<body>
+  <main class="stage" aria-label="跟随鼠标方向转头的猫咪">
+    <div class="shadow" aria-hidden="true"></div>
+    <canvas id="cat" width="512" height="512"></canvas>
+  </main>
+
+  <script>
+    const FRAME_SIZE = 512;
+    const FRAME_COUNT = 61;
+    const SPRITE_COLUMNS = 16;
+    const CENTER_FRAME = 2;
+    const RESET_ZONE_CENTER_X = 0.5;
+    const RESET_ZONE_CENTER_Y = 0.53;
+    const RESET_ZONE_RADIUS_X = 0.055;
+    const RESET_ZONE_RADIUS_Y = 0.075;
+    const TOP_SEAM_LEFT_MIN = 54;
+    const TOP_SEAM_RIGHT_MAX = 12;
+
+    // 这些点来自 contact_sheet_labeled.png 的人工校准。
+    // angle 使用屏幕坐标：右 0 度，下 90 度，左 ±180 度，上 -90 度。
+    const ANGLE_KEYS = [
+      { angle: -180, frame: 42, sourceFrame: 168, label: "left" },
+      { angle: -135, frame: 48, sourceFrame: 192, label: "left-up" },
+      { angle: -90, frame: 56, sourceFrame: 224, label: "up" },
+      { angle: -45, frame: 12, sourceFrame: 48, label: "right-up" },
+      { angle: 0, frame: 22, sourceFrame: 88, label: "right" },
+      { angle: 45, frame: 28, sourceFrame: 112, label: "right-down" },
+      { angle: 90, frame: 34, sourceFrame: 136, label: "down" },
+      { angle: 135, frame: 40, sourceFrame: 160, label: "left-down" },
+      { angle: 180, frame: 42, sourceFrame: 168, label: "left" }
+    ];
+    const RIGHT_TOP_KEY = { angle: -90, frame: 8, sourceFrame: 32, label: "up-right-side" };
+
+    const canvas = document.getElementById("cat");
+    const ctx = canvas.getContext("2d");
+    const sprite = new Image();
+    let currentFrame = CENTER_FRAME;
+    let targetFrame = CENTER_FRAME;
+    let pointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+
+    sprite.src = "sprite.webp?v=63";
+    sprite.onload = () => {
+      drawFrame(CENTER_FRAME);
+      requestAnimationFrame(tick);
+    };
+
+    function wrapFrameDistance(from, to) {
+      const raw = to - from;
+      const forward = (raw + FRAME_COUNT) % FRAME_COUNT;
+      const backward = forward - FRAME_COUNT;
+      return Math.abs(forward) <= Math.abs(backward) ? forward : backward;
+    }
+
+    function normalizeAngle(angle) {
+      let value = ((angle + 180) % 360 + 360) % 360 - 180;
+      return value === -180 ? 180 : value;
+    }
+
+    function interpolateFrame(start, end, angle) {
+      const t = (angle - start.angle) / (end.angle - start.angle);
+      const frameSpan = wrapFrameDistance(start.frame, end.frame);
+      return Math.round((start.frame + frameSpan * t + FRAME_COUNT) % FRAME_COUNT);
+    }
+
+    function calibratedFrameForAngle(angle) {
+      const a = normalizeAngle(angle);
+      if (a > -90 && a <= -45) {
+        return interpolateFrame(RIGHT_TOP_KEY, ANGLE_KEYS[3], a);
+      }
+      for (let i = 0; i < ANGLE_KEYS.length - 1; i += 1) {
+        const start = ANGLE_KEYS[i];
+        const end = ANGLE_KEYS[i + 1];
+        if (a >= start.angle && a <= end.angle) {
+          return interpolateFrame(start, end, a);
+        }
+      }
+      return CENTER_FRAME;
+    }
+
+    function isInSubjectResetZone(x, y, rect) {
+      const normalizedX = (x - rect.left) / rect.width;
+      const normalizedY = (y - rect.top) / rect.height;
+      const ellipseX = (normalizedX - RESET_ZONE_CENTER_X) / RESET_ZONE_RADIUS_X;
+      const ellipseY = (normalizedY - RESET_ZONE_CENTER_Y) / RESET_ZONE_RADIUS_Y;
+      return ellipseX * ellipseX + ellipseY * ellipseY <= 1;
+    }
+
+    function updateTargetFrame() {
+      const rect = canvas.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dx = pointer.x - cx;
+      const dy = pointer.y - cy;
+
+      if (isInSubjectResetZone(pointer.x, pointer.y, rect)) {
+        targetFrame = CENTER_FRAME;
+        return;
+      }
+
+      targetFrame = calibratedFrameForAngle(Math.atan2(dy, dx) * 180 / Math.PI);
+    }
+
+    function drawFrameAt(frame) {
+      const normalized = ((frame % FRAME_COUNT) + FRAME_COUNT) % FRAME_COUNT;
+      ctx.drawImage(
+        sprite,
+        (normalized % SPRITE_COLUMNS) * FRAME_SIZE,
+        Math.floor(normalized / SPRITE_COLUMNS) * FRAME_SIZE,
+        FRAME_SIZE,
+        FRAME_SIZE,
+        0,
+        0,
+        FRAME_SIZE,
+        FRAME_SIZE
+      );
+    }
+
+    function drawFrame(frame) {
+      ctx.clearRect(0, 0, FRAME_SIZE, FRAME_SIZE);
+      drawFrameAt(Math.round(frame));
+      canvas.dataset.frame = String(frame);
+    }
+
+    function isTopSeamTransition(from, to) {
+      const fromLeftTop = from >= TOP_SEAM_LEFT_MIN;
+      const toLeftTop = to >= TOP_SEAM_LEFT_MIN;
+      const fromRightTop = from <= TOP_SEAM_RIGHT_MAX;
+      const toRightTop = to <= TOP_SEAM_RIGHT_MAX;
+      return (fromLeftTop && toRightTop) || (fromRightTop && toLeftTop);
+    }
+
+    function nextFrameTowards(from, to) {
+      if (isTopSeamTransition(from, to)) {
+        return to;
+      }
+      const delta = wrapFrameDistance(from, to);
+      return (from + Math.sign(delta) + FRAME_COUNT) % FRAME_COUNT;
+    }
+
+    function tick() {
+      if (currentFrame !== targetFrame) {
+        currentFrame = nextFrameTowards(currentFrame, targetFrame);
+        drawFrame(currentFrame);
+      }
+
+      requestAnimationFrame(tick);
+    }
+
+    window.addEventListener("pointermove", (event) => {
+      pointer = { x: event.clientX, y: event.clientY };
+      updateTargetFrame();
+    }, { passive: true });
+
+    window.addEventListener("resize", updateTargetFrame);
+    window.__catFollowDebug = {
+      ANGLE_KEYS,
+      get frame() {
+        return currentFrame;
+      },
+      pointTo(x, y) {
+        pointer = { x, y };
+        updateTargetFrame();
+        currentFrame = targetFrame;
+        drawFrame(targetFrame);
+        return currentFrame;
+      }
+    };
+  </script>
+</body>
+</html>
